@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>九九乘法即時連線大對決</title>
+  <!-- Tailwind CSS CDN for modern responsive UI -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase App & Realtime Database compat libraries -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <style>
+    /* 優化 iPad 觸控體驗：禁止雙擊放大、選取文字與反彈 */
+    * {
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    }
+    .pulse-glow {
+      box-shadow: 0 0 25px rgba(245, 158, 11, 0.6);
+    }
+    /* 答題按鈕輕微按壓效果 */
+    .answer-btn:active {
+      transform: scale(0.96);
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col justify-between selection:bg-none">
+
+  <!-- ================= 視圖 1：首頁角色選擇 ================= -->
+  <div id="role-selection-screen" class="flex-1 flex flex-col items-center justify-center p-6 max-w-xl mx-auto w-full">
+    <div class="text-center mb-10">
+      <div class="text-6xl mb-4">⚡✖️➗</div>
+      <h1 class="text-4xl md:text-5xl font-black text-amber-400 tracking-wider">乘法速算大對決</h1>
+      <p class="text-slate-400 mt-3 text-lg">2 至 9 的乘數表 · iPad 即時連線賽</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
+      <!-- 老師端入口按鈕 -->
+      <button onclick="goToTeacherSetup()" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all p-6 rounded-2xl border-2 border-indigo-400 shadow-xl flex flex-col items-center text-center">
+        <span class="text-5xl mb-3">🖥️</span>
+        <span class="text-2xl font-bold text-white">老師投影端</span>
+        <span class="text-indigo-200 text-sm mt-2">建立房間、計時、全班排行榜</span>
+      </button>
+
+      <!-- 學生端入口按鈕 -->
+      <button onclick="goToStudentLogin()" class="bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition-all p-6 rounded-2xl border-2 border-emerald-400 shadow-xl flex flex-col items-center text-center">
+        <span class="text-5xl mb-3">📱</span>
+        <span class="text-2xl font-bold text-white">學生 iPad 端</span>
+        <span class="text-emerald-200 text-sm mt-2">輸入房號與姓名開始答題搶分</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ================= 視圖 2：學生登入畫面 ================= -->
+  <div id="student-login-screen" class="hidden flex-1 flex flex-col items-center justify-center p-6 max-w-md mx-auto w-full">
+    <div class="bg-slate-800 border border-slate-700 rounded-3xl p-8 w-full shadow-2xl">
+      <h2 class="text-3xl font-extrabold text-emerald-400 text-center mb-6">加入乘法比賽</h2>
+
+      <div class="space-y-5">
+        <div>
+          <label class="block text-slate-300 text-base font-semibold mb-2">4 位數房間號碼：</label>
+          <input id="input-room-id" type="number" pattern="[0-9]*" placeholder="例如：5821" 
+                 class="w-full text-center text-3xl font-black tracking-widest bg-slate-900 border-2 border-slate-600 rounded-xl py-3 text-amber-300 focus:outline-none focus:border-emerald-400">
+        </div>
+
+        <div>
+          <label class="block text-slate-300 text-base font-semibold mb-2">你的姓名或座號：</label>
+          <input id="input-student-name" type="text" placeholder="例如：5A 陳小明 / 12號" 
+                 class="w-full text-center text-2xl font-bold bg-slate-900 border-2 border-slate-600 rounded-xl py-3 text-white focus:outline-none focus:border-emerald-400">
+        </div>
+
+        <button onclick="studentJoinGame()" class="w-full bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-900 text-2xl font-black py-4 rounded-xl shadow-lg mt-4 transition-all">
+          🚀 進入候賽區
+        </button>
+
+        <button onclick="location.reload()" class="w-full text-slate-400 hover:text-slate-200 text-sm py-2">
+          ← 返回身分選擇
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 視圖 3：學生候賽等待畫面 ================= -->
+  <div id="student-waiting-screen" class="hidden flex-1 flex flex-col items-center justify-center p-6 max-w-md mx-auto w-full text-center">
+    <div class="bg-slate-800 border-2 border-slate-700 rounded-3xl p-8 w-full shadow-2xl">
+      <div class="text-6xl mb-4 animate-bounce">⏳</div>
+      <h2 class="text-3xl font-black text-amber-400 mb-2">已成功進入房間！</h2>
+      <p class="text-slate-300 text-lg mb-6">請看著教室前方的老師大螢幕，等待老師按下「開始比賽」...</p>
+      
+      <div class="bg-slate-900 rounded-2xl p-4 border border-slate-700 mb-4">
+        <div class="text-slate-400 text-sm">房間號碼</div>
+        <div id="wait-room-id" class="text-3xl font-black text-emerald-400 tracking-widest">----</div>
+      </div>
+
+      <div class="bg-slate-900 rounded-2xl p-4 border border-slate-700">
+        <div class="text-slate-400 text-sm">參賽學生</div>
+        <div id="wait-student-name" class="text-2xl font-bold text-white mt-1">---</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 視圖 4：學生 iPad 答題比賽畫面 ================= -->
+  <div id="student-game-screen" class="hidden flex-1 flex flex-col justify-between p-4 md:p-6 max-w-2xl mx-auto w-full">
+    <!-- 頂部狀態列 -->
+    <div class="grid grid-cols-3 gap-3 bg-slate-800 border border-slate-700 rounded-2xl p-3 shadow-lg items-center text-center">
+      <div class="bg-slate-900 rounded-xl p-2">
+        <div class="text-xs text-slate-400">選手</div>
+        <div id="game-student-name" class="text-base md:text-lg font-bold text-white truncate">---</div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-2 border border-amber-500/40">
+        <div class="text-xs text-amber-300">剩餘時間</div>
+        <div id="student-timer" class="text-2xl md:text-3xl font-black text-amber-400 font-mono">03:00</div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-2 border border-emerald-500/40">
+        <div class="text-xs text-emerald-300">目前得分</div>
+        <div id="student-score" class="text-2xl md:text-3xl font-black text-emerald-400">0</div>
+      </div>
+    </div>
+
+    <!-- 題目顯示區 -->
+    <div class="my-4 flex-1 flex flex-col items-center justify-center bg-slate-800 border-2 border-slate-700 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+      <div id="question-feedback" class="text-lg font-bold text-slate-400 mb-2 h-7">請選出正確答案（答對 +10 分）</div>
+      <div id="question-text" class="text-6xl md:text-8xl font-black text-white tracking-wider my-4 select-none">
+        8 × 7 = ?
+      </div>
+
+      <!-- 答錯 1 秒懲罰遮罩 -->
+      <div id="penalty-overlay" class="hidden absolute inset-0 bg-rose-950/95 flex flex-col items-center justify-center p-6 text-center z-20">
+        <div class="text-6xl mb-3">❌</div>
+        <div class="text-3xl font-black text-rose-300 mb-2">答錯了！請看清楚題目</div>
+        <div class="text-xl text-rose-200">等待 <span id="penalty-countdown" class="font-black text-amber-300 text-2xl">1.0</span> 秒後繼續...</div>
+      </div>
+    </div>
+
+    <!-- 4 個超大選項按鈕（專為 iPad 手指點擊最佳化） -->
+    <div id="options-container" class="grid grid-cols-2 gap-4 md:gap-5 mb-2">
+      <button onclick="submitAnswer(0)" id="opt-btn-0" class="answer-btn bg-indigo-600 hover:bg-indigo-500 text-white text-4xl md:text-5xl font-black py-7 md:py-9 rounded-2xl border-b-8 border-indigo-800 shadow-xl transition-all">
+        --
+      </button>
+      <button onclick="submitAnswer(1)" id="opt-btn-1" class="answer-btn bg-sky-600 hover:bg-sky-500 text-white text-4xl md:text-5xl font-black py-7 md:py-9 rounded-2xl border-b-8 border-sky-800 shadow-xl transition-all">
+        --
+      </button>
+      <button onclick="submitAnswer(2)" id="opt-btn-2" class="answer-btn bg-violet-600 hover:bg-violet-500 text-white text-4xl md:text-5xl font-black py-7 md:py-9 rounded-2xl border-b-8 border-violet-800 shadow-xl transition-all">
+        --
+      </button>
+      <button onclick="submitAnswer(3)" id="opt-btn-3" class="answer-btn bg-teal-600 hover:bg-teal-500 text-white text-4xl md:text-5xl font-black py-7 md:py-9 rounded-2xl border-b-8 border-teal-800 shadow-xl transition-all">
+        --
+      </button>
+    </div>
+  </div>
+
+  <!-- ================= 視圖 5：學生比賽結束結算畫面 ================= -->
+  <div id="student-result-screen" class="hidden flex-1 flex flex-col items-center justify-center p-6 max-w-md mx-auto w-full text-center">
+    <div class="bg-slate-800 border-2 border-amber-400 rounded-3xl p-8 w-full shadow-2xl">
+      <div class="text-6xl mb-4">🏆</div>
+      <h2 class="text-3xl font-black text-amber-400 mb-2">比賽時間到！</h2>
+      <p class="text-slate-300 mb-6">太棒了！請抬頭看老師的大螢幕公佈最終名次！</p>
+
+      <div class="bg-slate-900 rounded-2xl p-6 border border-slate-700 mb-6">
+        <div class="text-slate-400 text-base mb-1">你的最終得分</div>
+        <div id="final-student-score" class="text-6xl font-black text-emerald-400">0</div>
+        <div class="text-xs text-slate-400 mt-3">答對題數：<span id="final-correct-count" class="text-white font-bold">0</span> 題</div>
+      </div>
+
+      <p class="text-sm text-slate-400">若老師按「重新開始」，畫面會自動帶你進入下一局！</p>
+    </div>
+  </div>
+
+  <!-- ================= 視圖 6：老師大螢幕控制台 ================= -->
+  <div id="teacher-dashboard-screen" class="hidden flex-1 flex flex-col p-4 md:p-8 max-w-7xl mx-auto w-full">
+    <!-- 頂部控制資訊欄 -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-6">
+      <!-- 房間號碼區 -->
+      <div class="lg:col-span-4 bg-slate-800 border-2 border-indigo-500 rounded-3xl p-5 flex items-center justify-between shadow-xl">
+        <div>
+          <div class="text-indigo-300 text-sm font-bold uppercase tracking-wider">學生連線房間號碼</div>
+          <div id="teacher-room-id" class="text-5xl md:text-6xl font-black text-amber-400 tracking-widest mt-1">----</div>
+        </div>
+        <div class="text-right">
+          <span id="room-status-badge" class="inline-block px-4 py-1.5 rounded-full text-sm font-bold bg-amber-500/20 text-amber-300 border border-amber-400/40">
+            等待學生加入
+          </span>
+          <div class="text-slate-400 text-sm mt-2">已連線人數：<span id="connected-count" class="text-white font-black text-lg">0</span> 人</div>
+        </div>
+      </div>
+
+      <!-- 3分鐘倒數計時器 -->
+      <div class="lg:col-span-4 bg-slate-800 border-2 border-slate-700 rounded-3xl p-5 flex flex-col items-center justify-center shadow-xl">
+        <div class="text-slate-400 text-sm font-bold">比賽倒數計時（3 分鐘）</div>
+        <div id="teacher-timer" class="text-6xl font-black text-white font-mono tracking-wider mt-1">03:00</div>
+      </div>
+
+      <!-- 比賽控制按鈕 -->
+      <div class="lg:col-span-4 bg-slate-800 border-2 border-slate-700 rounded-3xl p-5 flex flex-col justify-center gap-3 shadow-xl">
+        <div class="flex gap-3">
+          <button id="btn-start-game" onclick="teacherStartGame()" class="flex-1 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black text-xl py-4 rounded-2xl shadow-lg transition-all">
+            ▶️ 開始比賽
+          </button>
+          <button id="btn-reset-game" onclick="teacherResetGame()" class="flex-1 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-xl py-4 rounded-2xl shadow-lg transition-all">
+            🔄 重新開始
+          </button>
+        </div>
+        <button onclick="location.reload()" class="text-xs text-slate-400 hover:text-slate-200 text-center">
+          結束並建立新房間號碼
+        </button>
+      </div>
+    </div>
+
+    <!-- 主內容區：左方已連線名單 + 右方即時動態排行榜 -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+      <!-- 已連線學生名單 -->
+      <div class="lg:col-span-4 bg-slate-800/90 border border-slate-700 rounded-3xl p-6 flex flex-col shadow-xl">
+        <h3 class="text-xl font-black text-indigo-300 mb-4 flex items-center justify-between">
+          <span>👥 連線學生名單</span>
+          <span class="text-xs font-normal text-slate-400">iPad 輸入房號即顯示</span>
+        </h3>
+        <div id="student-roster-list" class="flex flex-wrap gap-2 overflow-y-auto max-h-96 content-start">
+          <div class="text-slate-500 text-sm py-8 text-center w-full">目前尚無學生加入，請請學生在 iPad 輸入上方 4 位數房號...</div>
+        </div>
+      </div>
+
+      <!-- 即時全班動態排行榜 -->
+      <div class="lg:col-span-8 bg-slate-800 border-2 border-amber-500/40 rounded-3xl p-6 flex flex-col shadow-2xl">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-2xl font-black text-amber-400 flex items-center gap-2">
+            <span>🏆 全班即時風雲排行榜</span>
+          </h3>
+          <span class="text-sm text-slate-400">依分數高低即時動態排序（答對 +10 分）</span>
+        </div>
+
+        <div id="leaderboard-container" class="space-y-3 overflow-y-auto flex-1 pr-1">
+          <div class="text-slate-500 text-center py-12">等待比賽開始與學生作答...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自訂提示彈窗（取代瀏覽器原生 alert/confirm） -->
+  <div id="custom-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-800 border-2 border-slate-600 rounded-3xl max-w-sm w-full p-6 text-center shadow-2xl">
+      <div id="modal-icon" class="text-5xl mb-3">💡</div>
+      <div id="modal-message" class="text-lg font-bold text-white mb-6">提示訊息</div>
+      <div id="modal-buttons" class="flex gap-3 justify-center">
+        <button onclick="closeModal()" class="bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-black px-8 py-3 rounded-xl">
+          確定
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= JavaScript 遊戲與 Firebase 連線邏輯 ================= -->
+  <script>
+    // 1. 初始化 Firebase 設定
+    const firebaseConfig = {
+      apiKey: "AIzaSyA04GfKw7XBmZAeYiilLYovfVs73x9Giw8",
+      authDomain: "p5math.firebaseapp.com",
+      databaseURL: "https://p5math-default-rtdb.firebaseio.com",
+      projectId: "p5math",
+      storageBucket: "p5math.firebasestorage.app",
+      messagingSenderId: "277043699523",
+      appId: "1:277043699523:web:fcdcc33f0f75d3bf5319f6",
+      measurementId: "G-JS0FMRXEF3"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // 2. 全域狀態變數
+    const GAME_DURATION = 180; // 3 分鐘 = 180 秒
+    let currentRole = null; // 'teacher' | 'student'
+    let currentRoomId = null;
+    let currentPlayerId = null;
+    let currentPlayerName = "";
+    let currentScore = 0;
+    let correctCount = 0;
+
+    let currentQuestion = { a: 2, b: 2, answer: 4, options: [] };
+    let isLockedForPenalty = false;
+    let gameTimerInterval = null;
+    let currentRoomStatus = "waiting"; // 'waiting' | 'playing' | 'ended'
+    let currentEndTime = 0;
+
+    // 3. 音效合成器 (Web Audio API，免外部音訊檔，支援 iPad)
+    let audioCtx = null;
+    function playSound(type) {
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        const now = audioCtx.currentTime;
+        if (type === 'correct') {
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(523.25, now); // C5
+          osc.frequency.setValueAtTime(659.25, now + 0.08); // E5
+          gain.gain.setValueAtTime(0.2, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+          osc.start(now);
+          osc.stop(now + 0.25);
+        } else if (type === 'wrong') {
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(180, now);
+          osc.frequency.setValueAtTime(130, now + 0.15);
+          gain.gain.setValueAtTime(0.2, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+          osc.start(now);
+          osc.stop(now + 0.35);
+        }
+      } catch (e) {
+        // 忽略部分靜音裝置限制
+      }
+    }
+
+    // 4. 畫面切換輔助函式
+    function showScreen(screenId) {
+      const screens = [
+        'role-selection-screen',
+        'student-login-screen',
+        'student-waiting-screen',
+        'student-game-screen',
+        'student-result-screen',
+        'teacher-dashboard-screen'
+      ];
+      screens.forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+      });
+      document.getElementById(screenId).classList.remove('hidden');
+    }
+
+    // 自訂訊息彈窗
+    function showModal(message, icon = "💡", onConfirm = null) {
+      document.getElementById('modal-icon').textContent = icon;
+      document.getElementById('modal-message').textContent = message;
+      const btnContainer = document.getElementById('modal-buttons');
+
+      if (onConfirm) {
+        btnContainer.innerHTML = `
+          <button onclick="closeModal()" class="bg-slate-600 hover:bg-slate-500 text-white font-bold px-6 py-3 rounded-xl">取消</button>
+          <button id="modal-confirm-btn" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-6 py-3 rounded-xl">確定執行</button>
+        `;
+        document.getElementById('modal-confirm-btn').onclick = () => {
+          closeModal();
+          onConfirm();
+        };
+      } else {
+        btnContainer.innerHTML = `
+          <button onclick="closeModal()" class="bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-black px-8 py-3 rounded-xl">確定</button>
+        `;
+      }
+      document.getElementById('custom-modal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+      document.getElementById('custom-modal').classList.add('hidden');
+    }
+
+    function formatTime(seconds) {
+      const s = Math.max(0, Math.floor(seconds));
+      const mins = String(Math.floor(s / 60)).padStart(2, '0');
+      const secs = String(s % 60).padStart(2, '0');
+      return `${mins}:${secs}`;
+    }
+
+    // ================= 老師端邏輯 =================
+    function goToTeacherSetup() {
+      currentRole = 'teacher';
+      // 產生隨機 4 位數房間號碼 (1000 ~ 9999)
+      currentRoomId = String(Math.floor(1000 + Math.random() * 9000));
+      document.getElementById('teacher-room-id').textContent = currentRoomId;
+      showScreen('teacher-dashboard-screen');
+
+      const roomRef = db.ref(`rooms/${currentRoomId}`);
+      roomRef.set({
+        status: 'waiting',
+        createdAt: firebase.database.ServerValue.TIMESTAMP,
+        endTime: 0
+      });
+
+      // 監聽房間狀態與時間同步
+      roomRef.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        currentRoomStatus = data.status;
+        currentEndTime = data.endTime || 0;
+        updateTeacherStatusUI(data.status);
+
+        // 更新學生名單與排行榜
+        const playersObj = data.players || {};
+        renderTeacherPlayers(playersObj);
+      });
+    }
+
+    function updateTeacherStatusUI(status) {
+      const badge = document.getElementById('room-status-badge');
+      const startBtn = document.getElementById('btn-start-game');
+
+      if (status === 'waiting') {
+        badge.textContent = '等待學生加入';
+        badge.className = 'inline-block px-4 py-1.5 rounded-full text-sm font-bold bg-amber-500/20 text-amber-300 border border-amber-400/40';
+        startBtn.disabled = false;
+        startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        clearInterval(gameTimerInterval);
+        document.getElementById('teacher-timer').textContent = formatTime(GAME_DURATION);
+      } else if (status === 'playing') {
+        badge.textContent = '🔥 比賽進行中';
+        badge.className = 'inline-block px-4 py-1.5 rounded-full text-sm font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40';
+        startBtn.disabled = true;
+        startBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        startCountdownLoop('teacher');
+      } else if (status === 'ended') {
+        badge.textContent = '🏁 比賽已結束';
+        badge.className = 'inline-block px-4 py-1.5 rounded-full text-sm font-bold bg-rose-500/20 text-rose-300 border border-rose-400/40';
+        startBtn.disabled = true;
+        startBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        clearInterval(gameTimerInterval);
+        document.getElementById('teacher-timer').textContent = "00:00";
+      }
+    }
+
+    function renderTeacherPlayers(playersObj) {
+      const playersList = Object.values(playersObj);
+      document.getElementById('connected-count').textContent = playersList.length;
+
+      // 1. 渲染左側連線名單
+      const rosterEl = document.getElementById('student-roster-list');
+      if (playersList.length === 0) {
+        rosterEl.innerHTML = `<div class="text-slate-500 text-sm py-8 text-center w-full">目前尚無學生加入，請請學生在 iPad 輸入上方 4 位數房號...</div>`;
+      } else {
+        rosterEl.innerHTML = playersList.map(p => `
+          <span class="bg-slate-900 border border-slate-700 text-slate-200 px-3.5 py-2 rounded-xl text-base font-bold flex items-center gap-2 shadow">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+            ${escapeHtml(p.name)}
+          </span>
+        `).join('');
+      }
+
+      // 2. 渲染右側即時排行榜（依分數由高至低排列）
+      const leaderboardEl = document.getElementById('leaderboard-container');
+      if (playersList.length === 0) {
+        leaderboardEl.innerHTML = `<div class="text-slate-500 text-center py-12">等待學生加入並開始作答...</div>`;
+        return;
+      }
+
+      const sorted = [...playersList].sort((a, b) => (b.score || 0) - (a.score || 0));
+      const maxScore = Math.max(100, sorted[0]?.score || 100);
+
+      leaderboardEl.innerHTML = sorted.map((player, index) => {
+        const rank = index + 1;
+        let rankBadge = `<span class="w-9 h-9 rounded-xl bg-slate-700 text-slate-300 font-black flex items-center justify-center text-lg">${rank}</span>`;
+        let rowStyle = "bg-slate-900/90 border-slate-700";
+
+        if (rank === 1) {
+          rankBadge = `<span class="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xl shadow">🥇</span>`;
+          rowStyle = "bg-amber-500/10 border-amber-400/60";
+        } else if (rank === 2) {
+          rankBadge = `<span class="w-9 h-9 rounded-xl bg-slate-300 text-slate-950 font-black flex items-center justify-center text-xl shadow">🥈</span>`;
+          rowStyle = "bg-slate-400/10 border-slate-400/50";
+        } else if (rank === 3) {
+          rankBadge = `<span class="w-9 h-9 rounded-xl bg-amber-700 text-white font-black flex items-center justify-center text-xl shadow">🥉</span>`;
+          rowStyle = "bg-amber-700/10 border-amber-600/50";
+        }
+
+        const barWidth = Math.min(100, Math.round(((player.score || 0) / maxScore) * 100));
+
+        return `
+          <div class="border ${rowStyle} rounded-2xl p-3.5 flex items-center justify-between transition-all">
+            <div class="flex items-center gap-4 flex-1 min-w-0 pr-4">
+              ${rankBadge}
+              <div class="flex-1 min-w-0">
+                <div class="flex items-baseline justify-between mb-1">
+                  <span class="text-lg md:text-xl font-black text-white truncate">${escapeHtml(player.name)}</span>
+                  <span class="text-xs text-slate-400 ml-2">答對 ${player.correctCount || 0} 題</span>
+                </div>
+                <div class="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
+                  <div class="bg-gradient-to-r from-emerald-500 to-amber-400 h-full transition-all duration-300" style="width: ${barWidth}%"></div>
+                </div>
+              </div>
+            </div>
+            <div class="text-2xl md:text-3xl font-black text-amber-400 font-mono pl-2">
+              ${player.score || 0} <span class="text-xs font-normal text-slate-400">分</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function teacherStartGame() {
+      if (!currentRoomId) return;
+      const endTime = Date.now() + GAME_DURATION * 1000;
+      db.ref(`rooms/${currentRoomId}`).update({
+        status: 'playing',
+        endTime: endTime
+      });
+    }
+
+    function teacherResetGame() {
+      if (!currentRoomId) return;
+      showModal("確定要重新開始比賽嗎？所有學生的目前分數將會歸零並重新計時。", "🔄", () => {
+        const roomRef = db.ref(`rooms/${currentRoomId}`);
+        roomRef.once('value', (snap) => {
+          const data = snap.val();
+          if (!data) return;
+          const updates = {
+            status: 'waiting',
+            endTime: 0
+          };
+          if (data.players) {
+            Object.keys(data.players).forEach(pid => {
+              updates[`players/${pid}/score`] = 0;
+              updates[`players/${pid}/correctCount`] = 0;
+            });
+          }
+          roomRef.update(updates);
+        });
+      });
+    }
+
+    // ================= 學生端邏輯 =================
+    function goToStudentLogin() {
+      currentRole = 'student';
+      showScreen('student-login-screen');
+    }
+
+    function studentJoinGame() {
+      const roomInput = document.getElementById('input-room-id').value.trim();
+      const nameInput = document.getElementById('input-student-name').value.trim();
+
+      if (roomInput.length !== 4) {
+        showModal("請輸入老師大螢幕上的 4 位數房間號碼！", "⚠️");
+        return;
+      }
+      if (!nameInput) {
+        showModal("請輸入你的姓名或座號！", "⚠️");
+        return;
+      }
+
+      const roomRef = db.ref(`rooms/${roomInput}`);
+      roomRef.once('value', (snapshot) => {
+        if (!snapshot.exists()) {
+          showModal(`找不到房間號碼「${roomInput}」，請確認老師螢幕上的號碼是否正確！`, "❌");
+          return;
+        }
+
+        currentRoomId = roomInput;
+        currentPlayerName = nameInput;
+        currentScore = 0;
+        correctCount = 0;
+
+        // 在 Firebase 建立學生節點
+        const newPlayerRef = db.ref(`rooms/${currentRoomId}/players`).push();
+        currentPlayerId = newPlayerRef.key;
+        newPlayerRef.set({
+          name: currentPlayerName,
+          score: 0,
+          correctCount: 0,
+          joinedAt: firebase.database.ServerValue.TIMESTAMP
+        });
+
+        // 斷線時若需要保留成績則不移除節點
+        document.getElementById('wait-room-id').textContent = currentRoomId;
+        document.getElementById('wait-student-name').textContent = currentPlayerName;
+        document.getElementById('game-student-name').textContent = currentPlayerName;
+
+        // 監聽房間狀態變化
+        listenToRoomForStudent();
+      });
+    }
+
+    function listenToRoomForStudent() {
+      // 監聽自身分數被老師重置的情況
+      db.ref(`rooms/${currentRoomId}/players/${currentPlayerId}/score`).on('value', (snap) => {
+        const val = snap.val();
+        if (val === 0) {
+          currentScore = 0;
+          correctCount = 0;
+          document.getElementById('student-score').textContent = "0";
+        }
+      });
+
+      // 監聽房間比賽狀態與結束時間
+      db.ref(`rooms/${currentRoomId}`).on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        currentEndTime = data.endTime || 0;
+
+        if (data.status === 'waiting') {
+          clearInterval(gameTimerInterval);
+          showScreen('student-waiting-screen');
+        } else if (data.status === 'playing') {
+          if (currentRoomStatus !== 'playing') {
+            // 剛進入比賽狀態
+            generateNewQuestion();
+          }
+          showScreen('student-game-screen');
+          startCountdownLoop('student');
+        } else if (data.status === 'ended') {
+          clearInterval(gameTimerInterval);
+          document.getElementById('final-student-score').textContent = currentScore;
+          document.getElementById('final-correct-count').textContent = correctCount;
+          showScreen('student-result-screen');
+        }
+        currentRoomStatus = data.status;
+      });
+    }
+
+    // 產生 2-9 的乘數表隨機題目與 4 個不重複選項
+    function generateNewQuestion() {
+      const a = Math.floor(2 + Math.random() * 8); // 2 ~ 9
+      const b = Math.floor(2 + Math.random() * 8); // 2 ~ 9
+      const correctAns = a * b;
+
+      const optionsSet = new Set([correctAns]);
+
+      // 加入貼近真實乘法易錯的干擾選項
+      const candidates = [
+        a * (b + 1),
+        a * (b - 1),
+        (a + 1) * b,
+        (a - 1) * b,
+        correctAns + 2,
+        correctAns - 2,
+        correctAns + 10
+      ].filter(n => n > 2 && n <= 90 && n !== correctAns);
+
+      while (optionsSet.size < 4 && candidates.length > 0) {
+        const randIdx = Math.floor(Math.random() * candidates.length);
+        optionsSet.add(candidates.splice(randIdx, 1)[0]);
+      }
+
+      while (optionsSet.size < 4) {
+        const fallback = Math.floor(4 + Math.random() * 78);
+        if (fallback !== correctAns) optionsSet.add(fallback);
+      }
+
+      // 洗牌選項
+      const shuffledOptions = Array.from(optionsSet).sort(() => Math.random() - 0.5);
+
+      currentQuestion = {
+        a,
+        b,
+        answer: correctAns,
+        options: shuffledOptions
+      };
+
+      document.getElementById('question-text').textContent = `${a} × ${b} = ?`;
+      shuffledOptions.forEach((opt, idx) => {
+        document.getElementById(`opt-btn-${idx}`).textContent = opt;
+      });
+    }
+
+    function submitAnswer(optionIndex) {
+      if (isLockedForPenalty || currentRoomStatus !== 'playing') return;
+
+      const chosenValue = currentQuestion.options[optionIndex];
+      const feedbackEl = document.getElementById('question-feedback');
+
+      if (chosenValue === currentQuestion.answer) {
+        // 答對 +10 分
+        playSound('correct');
+        currentScore += 10;
+        correctCount += 1;
+        document.getElementById('student-score').textContent = currentScore;
+
+        feedbackEl.textContent = "✅ 太棒了！答對 +10 分！";
+        feedbackEl.className = "text-lg font-black text-emerald-400 mb-2 h-7";
+
+        // 即時同步分數到 Firebase
+        if (currentRoomId && currentPlayerId) {
+          db.ref(`rooms/${currentRoomId}/players/${currentPlayerId}`).update({
+            score: currentScore,
+            correctCount: correctCount
+          });
+        }
+
+        generateNewQuestion();
+      } else {
+        // 答錯不扣分，但強制等待 1 秒才能作答下一題
+        playSound('wrong');
+        isLockedForPenalty = true;
+        const overlay = document.getElementById('penalty-overlay');
+        const countdownEl = document.getElementById('penalty-countdown');
+        overlay.classList.remove('hidden');
+
+        feedbackEl.textContent = `❌ 剛才 ${currentQuestion.a} × ${currentQuestion.b} = ${currentQuestion.answer}`;
+        feedbackEl.className = "text-lg font-black text-rose-400 mb-2 h-7";
+
+        let remainingMs = 1000;
+        countdownEl.textContent = "1.0";
+
+        const penaltyTimer = setInterval(() => {
+          remainingMs -= 100;
+          if (remainingMs <= 0) {
+            clearInterval(penaltyTimer);
+            overlay.classList.add('hidden');
+            isLockedForPenalty = false;
+            generateNewQuestion();
+          } else {
+            countdownEl.textContent = (remainingMs / 1000).toFixed(1);
+          }
+        }, 100);
+      }
+    }
+
+    // ================= 3分鐘同步倒數計時器 =================
+    function startCountdownLoop(role) {
+      clearInterval(gameTimerInterval);
+      const timerEl = document.getElementById(role === 'teacher' ? 'teacher-timer' : 'student-timer');
+
+      const tick = () => {
+        const remainingSec = Math.ceil((currentEndTime - Date.now()) / 1000);
+        if (remainingSec <= 0) {
+          timerEl.textContent = "00:00";
+          clearInterval(gameTimerInterval);
+          if (role === 'teacher' && currentRoomStatus === 'playing') {
+            db.ref(`rooms/${currentRoomId}`).update({ status: 'ended' });
+          }
+        } else {
+          timerEl.textContent = formatTime(remainingSec);
+        }
+      };
+
+      tick();
+      gameTimerInterval = setInterval(tick, 250);
+    }
+
+    // 防止 XSS 的文字轉義輔助
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+  </script>
+</body>
+</html>
